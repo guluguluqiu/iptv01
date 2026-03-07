@@ -1,4 +1,4 @@
-name: Update and Filter IPTV List
+name: Update and Merge IPTV
 
 on:
   schedule:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  update-and-filter:
+  update-and-merge:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -15,39 +15,29 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download, Merge and Filter
+      - name: Merge and Clean
         run: |
           mkdir -p out
-          TEMP_ALL="out/all_merged.m3u8"
-          OUTPUT_FILE="out/iptv.m3u8"
-          > $TEMP_ALL
-          
-          # 策略1：针对 ybs 源，使用带 User-Agent 的 curl 获取
-          echo "Downloading ybs source..."
-          curl -L -s -A "Mozilla/5.0" "https://ybs.yu7.cc.cd/all.m3u8" >> $TEMP_ALL
-          
-          # 策略2：针对 GitHub 原始文件源，直接下载
-          # 如果它们在 GitHub 上，直接用 curl 即可，不需要复杂处理
-          GITHUB_SOURCES=(
+          # 仅保留 GitHub 上的两个源
+          URLS=(
             "https://raw.githubusercontent.com/CCSH/IPTV/main/live.m3u"
             "https://raw.githubusercontent.com/skddyj/iptv/main/IPTV.m3u"
           )
           
-          for url in "${GITHUB_SOURCES[@]}"; do
-            echo "Downloading $url..."
+          TEMP_ALL="out/all_merged.m3u8"
+          OUTPUT_FILE="out/iptv.m3u8"
+          > $TEMP_ALL
+          
+          for url in "${URLS[@]}"; do
             curl -L -s "$url" >> $TEMP_ALL
           done
           
-          # 格式化并过滤：确保格式标准
+          # 格式清理：
+          # 1. 确保以 #EXTM3U 开头
+          # 2. 将所有符合 M3U8 标准的行提取出来，剔除空行和无效字符
           echo "#EXTM3U" > $OUTPUT_FILE
-          awk '
-            /#EXTINF/ { name = $0 } 
-            /^http/ { 
-              if (name ~ /CCTV|卫视|影院|轮播/ && name !~ /市|县|区|都市|经视/) {
-                print name; print $0 
-              }
-            }' $TEMP_ALL >> $OUTPUT_FILE
-            
+          awk '/^#EXTINF/ {name=$0} /^https?:\/\// {print name; print $0}' $TEMP_ALL >> $OUTPUT_FILE
+          
           rm $TEMP_ALL
 
       - name: Commit and push changes
@@ -55,4 +45,4 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add -f out/iptv.m3u8
-          if git diff --staged --quiet; then echo "No changes."; else git commit -m "Update IPTV with custom strategy: $(date +'%Y-%m-%d %H:%M:%S')"; git push; fi
+          if git diff --staged --quiet; then echo "No changes."; else git commit -m "Merged clean IPTV: $(date +'%Y-%m-%d %H:%M:%S')"; git push; fi

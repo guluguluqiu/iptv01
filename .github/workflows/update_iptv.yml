@@ -1,4 +1,4 @@
-name: Update, Filter and Merge IPTV
+name: Update and Filter IPTV List
 
 on:
   schedule:
@@ -24,33 +24,29 @@ jobs:
             "https://raw.githubusercontent.com/skddyj/iptv/main/IPTV.m3u"
           )
           
-          TEMP_ALL="out/all_merged.m3u8"
           OUTPUT_FILE="out/iptv.m3u8"
+          TEMP_ALL="out/all_merged.m3u8"
           
           > $TEMP_ALL
           for url in "${URLS[@]}"; do
             curl -L -s "$url" >> $TEMP_ALL
           done
           
-          # 1. 过滤：保留 CCTV, 卫视等，剔除地方台/市级关键词
-          # 2. 排序与去重：确保每个频道名称唯一
-          # 3. 整理：使用 awk 重新组织格式
+          # 格式化处理：确保符合 M3U8 标准
+          # 读取临时文件，过滤关键词，并确保每个 URL 都配有 #EXTINF
           echo "#EXTM3U" > $OUTPUT_FILE
           
-          # 使用 awk 处理：将名称和链接存入临时数组，名称相同则追加地址
-          awk -F'[,]' '
-            /#EXTINF/ {name=$2; getline; url=$1; 
+          awk '
+            # 找到名称行，存入变量 name
+            /#EXTINF/ { name = $0 } 
+            # 找到 http 开头的行，并进行过滤与输出
+            /^http/ { 
+              # 只有当频道名符合要求时才输出 (白名单 + 黑名单过滤)
               if (name ~ /CCTV|卫视|影院|轮播/ && name !~ /市|县|区|都市|经视/) {
-                if (list[name] == "") { list[name]=url; names[++count]=name }
-                else { list[name]=list[name] "\n" url }
-              }
-            }
-            END {
-              for (i=1; i<=count; i++) {
-                print "#EXTINF:-1," names[i]; print list[names[i]]
+                print name; print $0 
               }
             }' $TEMP_ALL >> $OUTPUT_FILE
-          
+            
           rm $TEMP_ALL
 
       - name: Commit and push changes
@@ -58,4 +54,4 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add -f out/iptv.m3u8
-          if git diff --staged --quiet; then echo "No changes."; else git commit -m "Merged and Optimized IPTV"; git push; fi
+          if git diff --staged --quiet; then echo "No changes."; else git commit -m "Fixed format for PotPlayer: $(date +'%Y-%m-%d %H:%M:%S')"; git push; fi

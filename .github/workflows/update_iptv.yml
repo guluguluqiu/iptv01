@@ -13,7 +13,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       - name: Fetch, Standardize, Group and Add Logos
         run: |
@@ -31,7 +31,7 @@ jobs:
             "https://zuboiptv.myyu7.ccwu.cc/iptv"
             "https://zhuan.myyu7.ccwu.cc/iptv"
             "https://zhongjiiptv.yu7.cc.cd/live"
-            )
+          )
           
           RAW_ALL="out/raw_all.txt"
           OUTPUT_FILE="out/iptv.m3u8"
@@ -64,16 +64,11 @@ jobs:
               return "其他频道"
             }
 
-            # 生成台标图片 URL 函数 (支持范例公共台标库，可自行更换 base_url)
+            # 生成台标图片 URL 函数
             function get_logo(name) {
               base_url = "https://raw.githubusercontent.com/Fanmingming/live/main/tv/"
-              
-              # 清理名称中的修饰词，获取标准文件名
-              clean_name = name
-              
-              # 匹配规则生成台标全路径
-              if (clean_name != "") {
-                return base_url clean_name ".png"
+              if (name != "") {
+                return base_url name ".png"
               }
               return ""
             }
@@ -82,10 +77,12 @@ jobs:
             
             # 处理 M3U 格式：提取 #EXTINF 中的频道名
             /^#EXTINF/ {
-              match(\(0, /,[^,]+\)/)
-              if (RLENGTH > 0) {
-                current_name = substr($0, RSTART + 1)
-              } else {
+              current_name = ""
+              idx = index($0, ",")
+              if (idx > 0) {
+                current_name = substr($0, idx + 1)
+              }
+              if (current_name == "") {
                 current_name = "未知频道"
               }
               gsub("\r", "", current_name)
@@ -136,9 +133,9 @@ jobs:
           rm -f "$RAW_ALL"
 
           # 验证输出文件状态
-          CHANNEL_COUNT=\((grep -c '^https?://' "\)OUTPUT_FILE" || true)
+          CHANNEL_COUNT=\((grep -c '^https\?://' "\)OUTPUT_FILE" || true)
           if [ "$CHANNEL_COUNT" -gt 0 ]; then
-            echo "成功生成 \(OUTPUT_FILE，共处理\)CHANNEL_COUNT 个频道（已添加 tvg-name、tvg-logo 和分组信息）。"
+            echo "成功生成 \(OUTPUT_FILE，共处理\)CHANNEL_COUNT 个频道。"
           else
             echo "错误：未能解析到有效频道！" && exit 1
           fi

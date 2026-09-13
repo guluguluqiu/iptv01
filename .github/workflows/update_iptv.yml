@@ -13,132 +13,104 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v4
 
-      - name: Fetch, Standardize, Group and Add Logos
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Fetch, Process, Group and Clean IPTV
         run: |
           mkdir -p out
           
-          # 包含 M3U 和 TXT 格式的源列表
-          URLS=(
-            "https://raw.githubusercontent.com/CCSH/IPTV/main/live.m3u"
-            "https://raw.githubusercontent.com/skddyj/iptv/main/IPTV.m3u"
-            "https://iptv.su7.cn.mt/iptv?key=bugaosunihaha" 
-            "https://iptv.ybs.ccwu.cc/interface.m3u"
-            "https://iptv.yu7.qzz.io/iptv.m3u?key=aqsjlyf"
-            "https://iptv.rsm.us.ci/xymm"
-            "https://iptv.yu7.cc.cd/iptv"
-            "https://zuboiptv.myyu7.ccwu.cc/iptv"
-            "https://zhuan.myyu7.ccwu.cc/iptv"
-            "https://zhongjiiptv.yu7.cc.cd/live"
-          )
-          
-          RAW_ALL="out/raw_all.txt"
-          OUTPUT_FILE="out/iptv.m3u8"
-          
-          > "$RAW_ALL"
-          
-          # 1. 抓取所有源并保证换行分隔
-          for url in "${URLS[@]}"; do
-            curl -L -s --retry 3 "\(url" >> "\)RAW_ALL"
-            echo "" >> "$RAW_ALL"
-          done
-          
-          # 2. 统一格式、去重、根据名称分组并补充 tvg-name 与 tvg-logo
-          echo "#EXTM3U" > "$OUTPUT_FILE"
-          
-          awk '
-            # 判断分组函数
-            function get_group(name) {
-              name_upper = toupper(name)
-              if (name_upper ~ /CCTV|中央/) return "央视频道"
-              if (name ~ /卫视/) return "卫视频道"
-              if (name_upper ~ /CGTN/) return "CGTN"
-              if (name ~ /凤凰|翡翠|TVB|HBO|星空|明珠|动感|FOX|CNN|BBC|澳亚|莲花|三立|中天|东森/) return "港澳台/外视"
-              if (name ~ /电影|影院|剧场|影视|动作|喜剧|科幻/) return "影视频道"
-              if (name ~ /体育|足球|篮球|CBA|NBA|赛事|竞技|赛车/) return "体育频道"
-              if (name ~ /少儿|动画|卡通|炫动|动漫/) return "少儿动画"
-              if (name ~ /新闻|资讯/) return "新闻频道"
-              if (name ~ /纪实|纪录|探索|地理|人文|历史/) return "纪实历史"
-              if (name ~ /音乐|MTV|演唱会/) return "音乐频道"
+          cat << 'EOF' > process_iptv.py
+          import urllib.request
+          import re
+
+          urls = [
+              "https://raw.githubusercontent.com/CCSH/IPTV/main/live.m3u",
+              "https://raw.githubusercontent.com/skddyj/iptv/main/IPTV.m3u",
+              "https://iptv.su7.cn.mt/iptv?key=bugaosunihaha",
+              "https://iptv.ybs.ccwu.cc/interface.m3u",
+              "https://iptv.yu7.qzz.io/iptv.m3u?key=aqsjlyf",
+              "https://iptv.rsm.us.ci/xymm",
+              "https://iptv.yu7.cc.cd/iptv",
+              "https://zuboiptv.myyu7.ccwu.cc/iptv",
+              "https://zhuan.myyu7.ccwu.cc/iptv",
+              "https://zhongjiiptv.yu7.cc.cd/live"
+          ]
+
+          def get_group(name):
+              name_upper = name.upper()
+              if re.search(r'CCTV|中央', name_upper): return "央视频道"
+              if "卫视" in name: return "卫视频道"
+              if "CGTN" in name_upper: return "CGTN"
+              if re.search(r'凤凰|翡翠|TVB|HBO|星空|明珠|动感|FOX|CNN|BBC|澳亚|莲花|三立|中天|东森', name): return "港澳台/外视"
+              if re.search(r'电影|影院|剧场|影视|动作|喜剧|科幻', name): return "影视频道"
+              if re.search(r'体育|足球|篮球|CBA|NBA|赛事|竞技|赛车', name): return "体育频道"
+              if re.search(r'少儿|动画|卡通|炫动|动漫', name): return "少儿动画"
+              if re.search(r'新闻|资讯', name): return "新闻频道"
+              if re.search(r'纪实|纪录|探索|地理|人文|历史', name): return "纪实历史"
+              if re.search(r'音乐|MTV|演唱会', name): return "音乐频道"
               return "其他频道"
-            }
 
-            # 生成台标图片 URL 函数
-            function get_logo(name) {
-              base_url = "https://raw.githubusercontent.com/Fanmingming/live/main/tv/"
-              if (name != "") {
-                return base_url name ".png"
-              }
-              return ""
-            }
+          def get_logo(name):
+              return f"https://raw.githubusercontent.com/Fanmingming/live/main/tv/{name}.png" if name else ""
 
-            BEGIN { FS="," }
-            
-            # 处理 M3U 格式：提取 #EXTINF 中的频道名
-            /^#EXTINF/ {
-              current_name = ""
-              idx = index($0, ",")
-              if (idx > 0) {
-                current_name = substr($0, idx + 1)
-              }
-              if (current_name == "") {
-                current_name = "未知频道"
-              }
-              gsub("\r", "", current_name)
-              gsub("^[ \t]+|[ \t]+$", "", current_name)
-              next
-            }
-            
-            # 处理 M3U 格式的播放链接
-            /^https?:\/\// && current_name != "" {
-              url = $0
-              gsub("\r", "", url)
-              gsub(" ", "", url)
-              
-              if (url != "" && !(url in seen_urls)) {
-                seen_urls[url] = 1
-                group = get_group(current_name)
-                logo = get_logo(current_name)
-                
-                print "#EXTINF:-1 tvg-name=\"" current_name "\" tvg-logo=\"" logo "\" group-title=\"" group "\"," current_name
-                print url
-              }
-              current_name = ""
-              next
-            }
-            
-            # 处理 TXT 格式：频道名,http://...
-            /,https?:\/\// {
-              name = $1
-              url = $2
-              
-              gsub("\r", "", name)
-              gsub("^[ \t]+|[ \t]+$", "", name)
-              gsub("\r", "", url)
-              gsub(" ", "", url)
-              
-              if (url != "" && !(url in seen_urls)) {
-                seen_urls[url] = 1
-                group = get_group(name)
-                logo = get_logo(name)
-                
-                print "#EXTINF:-1 tvg-name=\"" name "\" tvg-logo=\"" logo "\" group-title=\"" group "\"," name
-                print url
-              }
-              next
-            }
-          ' "\(RAW_ALL" >> "\)OUTPUT_FILE"
-          
-          rm -f "$RAW_ALL"
+          seen_urls = set()
+          channels = []
 
-          # 验证输出文件状态
-          CHANNEL_COUNT=\((grep -c '^https\?://' "\)OUTPUT_FILE" || true)
-          if [ "$CHANNEL_COUNT" -gt 0 ]; then
-            echo "成功生成 \(OUTPUT_FILE，共处理\)CHANNEL_COUNT 个频道。"
-          else
-            echo "错误：未能解析到有效频道！" && exit 1
-          fi
+          for url in urls:
+              try:
+                  req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                  with urllib.request.urlopen(req, timeout=10) as response:
+                      content = response.read().decode('utf-8', errors='ignore')
+                      lines = content.splitlines()
+                      
+                      current_name = ""
+                      for line in lines:
+                          line = line.strip()
+                          if not line:
+                              continue
+                          
+                          # M3U 格式解析
+                          if line.startswith("#EXTINF"):
+                              if "," in line:
+                                  current_name = line.split(",")[-1].strip()
+                              else:
+                                  current_name = "未知频道"
+                          elif line.startswith(("http://", "https://")) and current_name:
+                              if line not in seen_urls:
+                                  seen_urls.add(line)
+                                  group = get_group(current_name)
+                                  logo = get_logo(current_name)
+                                  channels.append(f'#EXTINF:-1 tvg-name="{current_name}" tvg-logo="{logo}" group-title="{group}",{current_name}\n{line}')
+                              current_name = ""
+                          
+                          # TXT 格式解析 (频道名,http://...)
+                          elif "," in line and ("http://" in line or "https://" in line):
+                              parts = line.split(",", 1)
+                              name = parts[0].strip()
+                              stream_url = parts[1].strip()
+                              if stream_url.startswith(("http://", "https://")) and stream_url not in seen_urls:
+                                  seen_urls.add(stream_url)
+                                  group = get_group(name)
+                                  logo = get_logo(name)
+                                  channels.append(f'#EXTINF:-1 tvg-name="{name}" tvg-logo="{logo}" group-title="{group}",{name}\n{stream_url}')
+              except Exception as e:
+                  print(f"抓取失败 {url}: {e}")
+
+          if channels:
+              with open("out/iptv.m3u8", "w", encoding="utf-8") as f:
+                  f.write("#EXTM3U\n" + "\n".join(channels) + "\n")
+              print(f"成功导出 {len(channels)} 个频道。")
+          else:
+              print("错误：未能解析到任何有效频道！")
+              exit(1)
+          EOF
+
+          python3 process_iptv.py
 
       - name: Commit and push changes
         run: |

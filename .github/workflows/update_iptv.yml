@@ -2,7 +2,7 @@ name: Update and Merge IPTV
 
 on:
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 */12 * * *'
   workflow_dispatch:
 
 jobs:
@@ -15,34 +15,142 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Merge and Clean
+      - name: Fetch, Standardize, Group and Add Logos
         run: |
           mkdir -p out
-          # 仅保留 GitHub 上的两个源
+          
+          # 包含 M3U 和 TXT 格式的源列表
           URLS=(
             "https://raw.githubusercontent.com/CCSH/IPTV/main/live.m3u"
             "https://raw.githubusercontent.com/skddyj/iptv/main/IPTV.m3u"
-          )
+            "https://iptv.su7.cn.mt/iptv?key=bugaosunihaha" 
+            "https://iptv.ybs.ccwu.cc/interface.m3u"
+            "https://iptv.yu7.qzz.io/iptv.m3u?key=aqsjlyf"
+            "https://iptv.rsm.us.ci/xymm"
+            "https://iptv.yu7.cc.cd/iptv"
+            "https://zuboiptv.myyu7.ccwu.cc/iptv"
+            "https://zhuan.myyu7.ccwu.cc/iptv"
+            "https://zhongjiiptv.yu7.cc.cd/live"
+            )
           
-          TEMP_ALL="out/all_merged.m3u8"
+          RAW_ALL="out/raw_all.txt"
           OUTPUT_FILE="out/iptv.m3u8"
-          > $TEMP_ALL
           
+          > "$RAW_ALL"
+          
+          # 1. 抓取所有源并保证换行分隔
           for url in "${URLS[@]}"; do
-            curl -L -s "$url" >> $TEMP_ALL
+            curl -L -s --retry 3 "\(url" >> "\)RAW_ALL"
+            echo "" >> "$RAW_ALL"
           done
           
-          # 格式清理：
-          # 1. 确保以 #EXTM3U 开头
-          # 2. 将所有符合 M3U8 标准的行提取出来，剔除空行和无效字符
-          echo "#EXTM3U" > $OUTPUT_FILE
-          awk '/^#EXTINF/ {name=$0} /^https?:\/\// {print name; print $0}' $TEMP_ALL >> $OUTPUT_FILE
+          # 2. 统一格式、去重、根据名称分组并补充 tvg-name 与 tvg-logo
+          echo "#EXTM3U" > "$OUTPUT_FILE"
           
-          rm $TEMP_ALL
+          awk '
+            # 判断分组函数
+            function get_group(name) {
+              name_upper = toupper(name)
+              if (name_upper ~ /CCTV|中央/) return "央视频道"
+              if (name ~ /卫视/) return "卫视频道"
+              if (name_upper ~ /CGTN/) return "CGTN"
+              if (name ~ /凤凰|翡翠|TVB|HBO|星空|明珠|动感|FOX|CNN|BBC|澳亚|莲花|三立|中天|东森/) return "港澳台/外视"
+              if (name ~ /电影|影院|剧场|影视|动作|喜剧|科幻/) return "影视频道"
+              if (name ~ /体育|足球|篮球|CBA|NBA|赛事|竞技|赛车/) return "体育频道"
+              if (name ~ /少儿|动画|卡通|炫动|动漫/) return "少儿动画"
+              if (name ~ /新闻|资讯/) return "新闻频道"
+              if (name ~ /纪实|纪录|探索|地理|人文|历史/) return "纪实历史"
+              if (name ~ /音乐|MTV|演唱会/) return "音乐频道"
+              return "其他频道"
+            }
+
+            # 生成台标图片 URL 函数 (支持范例公共台标库，可自行更换 base_url)
+            function get_logo(name) {
+              base_url = "https://raw.githubusercontent.com/Fanmingming/live/main/tv/"
+              
+              # 清理名称中的修饰词，获取标准文件名
+              clean_name = name
+              
+              # 匹配规则生成台标全路径
+              if (clean_name != "") {
+                return base_url clean_name ".png"
+              }
+              return ""
+            }
+
+            BEGIN { FS="," }
+            
+            # 处理 M3U 格式：提取 #EXTINF 中的频道名
+            /^#EXTINF/ {
+              match(\(0, /,[^,]+\)/)
+              if (RLENGTH > 0) {
+                current_name = substr($0, RSTART + 1)
+              } else {
+                current_name = "未知频道"
+              }
+              gsub("\r", "", current_name)
+              gsub("^[ \t]+|[ \t]+$", "", current_name)
+              next
+            }
+            
+            # 处理 M3U 格式的播放链接
+            /^https?:\/\// && current_name != "" {
+              url = $0
+              gsub("\r", "", url)
+              gsub(" ", "", url)
+              
+              if (url != "" && !(url in seen_urls)) {
+                seen_urls[url] = 1
+                group = get_group(current_name)
+                logo = get_logo(current_name)
+                
+                print "#EXTINF:-1 tvg-name=\"" current_name "\" tvg-logo=\"" logo "\" group-title=\"" group "\"," current_name
+                print url
+              }
+              current_name = ""
+              next
+            }
+            
+            # 处理 TXT 格式：频道名,http://...
+            /,https?:\/\// {
+              name = $1
+              url = $2
+              
+              gsub("\r", "", name)
+              gsub("^[ \t]+|[ \t]+$", "", name)
+              gsub("\r", "", url)
+              gsub(" ", "", url)
+              
+              if (url != "" && !(url in seen_urls)) {
+                seen_urls[url] = 1
+                group = get_group(name)
+                logo = get_logo(name)
+                
+                print "#EXTINF:-1 tvg-name=\"" name "\" tvg-logo=\"" logo "\" group-title=\"" group "\"," name
+                print url
+              }
+              next
+            }
+          ' "\(RAW_ALL" >> "\)OUTPUT_FILE"
+          
+          rm -f "$RAW_ALL"
+
+          # 验证输出文件状态
+          CHANNEL_COUNT=\((grep -c '^https?://' "\)OUTPUT_FILE" || true)
+          if [ "$CHANNEL_COUNT" -gt 0 ]; then
+            echo "成功生成 \(OUTPUT_FILE，共处理\)CHANNEL_COUNT 个频道（已添加 tvg-name、tvg-logo 和分组信息）。"
+          else
+            echo "错误：未能解析到有效频道！" && exit 1
+          fi
 
       - name: Commit and push changes
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add -f out/iptv.m3u8
-          if git diff --staged --quiet; then echo "No changes."; else git commit -m "Merged clean IPTV: $(date +'%Y-%m-%d %H:%M:%S')"; git push; fi
+          if git diff --staged --quiet; then
+            echo "没有任何变更，无需提交。"
+          else
+            git commit -m "Merged IPTV with EPG & Logos: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+            git push
+          fi
